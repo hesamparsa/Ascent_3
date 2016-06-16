@@ -1,0 +1,323 @@
+---
+title: "third"
+author: "Hesam Parsa"
+date: "June 12, 2016"
+output: html_document
+---
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r libraries}
+library(readr)
+library(dplyr) 
+library(stringr)
+library(caret)
+```
+
+```{r}
+setwd("~/Desktop/Bootcamp/third")
+DF <- read_csv("train.csv")
+dim(DF)
+head(DF)
+str(DF)
+```
+
+
+
+```{r}
+
+## Cleaning data
+
+# Not informative predictors
+DF <- DF %>%
+ select(-AnimalID, -DateTime)
+
+str(DF)
+```
+
+```{r}
+sum(is.na(DF$Name))/nrow(DF)
+
+DF <- DF %>%
+ mutate(Name = ifelse(is.na(Name), "not_known", Name))
+ 
+```
+
+``` {r}
+
+length(unique(DF$Name))
+
+pop_names_cat <- read.csv("top_100_cat_names.txt") 
+pop_names_dog <- read.csv("top_100_dog_names.txt")   
+
+
+pop_names_cat <- str_trim( as.character(pop_names_cat[, 2]) )
+pop_names_dog <- str_trim( as.character(pop_names_dog[, 2]) )
+
+DF <- DF %>%
+  mutate(PopNameD = AnimalType == "Dog" & Name %in% pop_names_dog) %>%
+  mutate(PopNameC = AnimalType == "Cat" & Name %in% pop_names_cat) %>%
+  mutate(PopName = ifelse(PopNameC | PopNameD, "yes", "no")) %>%
+  mutate(PopName = ifelse(Name == "not_known", "not_known", PopName)) %>%
+  select(-PopNameC, -PopNameD, -Name)
+  
+table(DF$PopName)
+```
+## Breed
+```{r}
+
+#   Breed
+length(unique(DF$Breed))
+head(DF$Breed)
+
+DF <- DF %>%
+  mutate(BreedSH = factor( str_detect(Breed, "Shorthair")) ) %>%
+  mutate(BreedL = factor( str_detect(Breed, "Long"))) %>%
+  mutate(BreedD = factor( str_detect(Breed, "Domestic"))) %>%
+  mutate(BreedMix = factor( str_detect(Breed, "Mix"))) %>%
+  mutate(Breed2 = factor( str_detect(Breed, "/"))) %>%
+  select(-Breed)
+
+table(DF$BreedSH)
+table(DF$BreedL)
+table(DF$BreedD)
+table(DF$BreedMix)
+table(DF$Breed2)
+
+head(DF)
+```
+
+##Color
+
+```{r}
+length(unique(DF$Color))
+
+#find unique words for color
+un_col <- str_replace_all(DF$Color, "[^[:alpha:]]", " ")  %>%
+  word() %>%
+  table() 
+
+un_col
+un_col <- un_col[!un_col < 50]   
+un_col_names <- names(un_col)
+
+for(nnn in un_col_names){
+  DF[, nnn] <- as.factor(str_detect(DF$Color, nnn))
+}
+
+DF$Color <- NULL
+```
+
+## AgeuponOutcome
+
+```{r}
+
+DF <- DF %>%
+    mutate(AgeOnOutcome = 
+      as.numeric( str_extract(AgeuponOutcome, "[:digit:]+") ) *
+         str_detect(AgeuponOutcome, "year")*360 +
+      as.numeric( str_extract(AgeuponOutcome, "[:digit:]+") ) *
+        str_detect(AgeuponOutcome, "month")*30 +
+      as.numeric( str_extract(AgeuponOutcome, "[:digit:]+") ) *
+        str_detect(AgeuponOutcome, "week")*7 + 
+      as.numeric( str_extract(AgeuponOutcome, "[:digit:]+") ) *
+       str_detect(AgeuponOutcome, "day")*1)
+
+DF$AgeuponOutcome <- NULL
+
+#View(DF)
+```
+
+
+## non-linear features
+
+Let us add non-linear features for time.
+
+```{r}
+DF <- DF %>%
+    mutate(AgeOnOutcome2 = AgeOnOutcome^2, 
+           AgeOnOutcome12 = AgeOnOutcome^(1/2), 
+           AgeOnOutcome3 = AgeOnOutcome^3, 
+           AgeOnOutcome13 = AgeOnOutcome^(1/3))
+
+```
+
+## Other predictors
+
+THis can't be used in prediction and is not helpfull right now. Remove this for now..
+
+```{r}
+DF$OutcomeSubtype <- NULL
+
+```
+
+```{r}
+length(unique(DF$SexuponOutcome))
+```
+
+## Convert factors to factors
+
+```{r}
+DF[, 1:4] <- lapply(DF[, 1:4], as.factor )  #lapply return the list
+
+```
+
+
+# Dimension
+
+```{r}
+dim(DF)
+str(DF)
+sapply(DF, is.factor)  #sapply gives you a vector
+
+```
+
+
+# Create Binary outcome
+
+Create data frame for binary classification
+
+```{r}
+# alive or not
+DF_B <- DF %>%
+  mutate(OutcomeType = OutcomeType %in% c("Adoption")) %>%
+  mutate(OutcomeType = ifelse(OutcomeType, "yes", "no")) 
+```
+
+
+## Fit basic linear model
+
+```{r}
+
+#install.packages("e1071")
+source("train_lm.R")
+#debugSource("train_lm.R")
+
+incl_var <- "(AnimalType + PopName + BreedSH + BreedL + BreedD + BreedMix + Breed2)"
+
+form = str_c("~ " ,  str_c(names(DF_B)[-1], collapse = " + "), "+ AgeOnOutcome:", incl_var,"+ AgeOnOutcome2:", incl_var,"+ AgeOnOutcome3:", incl_var,"+ AgeOnOutcome12:", incl_var,"+ AgeOnOutcome13:", incl_var) 
+form.f <- as.formula(form)
+
+res_LM <- train_lm(DF_B, error_est = "none", model = "glm", 
+                   y_ind = 1, x_ind = 2:ncol(DF),
+                   form.f = form.f)
+names(res_LM)
+
+```
+
+
+## Evaluating Linear Model
+
+### Predict for one observation of training data
+
+```{r}
+# LEt us take first record in test as an example
+View(res_LM$train[1, ])
+
+predict(res_LM$model, res_LM$train[1, ])
+
+#Predicted Probability
+predict(res_LM$model, res_LM$train[1, ] , type = "prob")
+
+#actual::
+res_LM$train[1, "outcome"]
+
+```
+
+### Predict for all the train observations
+
+```{r}
+trainPred <- predict(res_LM$model, res_LM$train)
+
+confusionMatrix(trainPred, res_LM$train$outcome, positive = "yes")
+
+# Predicted probabilities
+trainPred <- predict(res_LM$model, res_LM$train, type = "prob")
+```
+
+
+### ROC Curve
+
+ROC curve is Sensitivity vs Specificity for different cut-off points. 
+(If x axis goes from 0to1 vs 1to0, then Sensit vs 1-Spec)
+
+Each point on the ROC curve represents a sensitivity/specificity pair corresponding to a particular decision threshold.  The closer the ROC curve is to the upper left corner, the higher the overall accuracy of the test.
+
+http://topepo.github.io/caret/other.html
+
+### plot, get probabilities
+
+```{r}
+source("make_ROC_curve.R")
+ret <- make_ROC(res_LM)
+best.cut.off <<- ret$best.cut.off
+trainPred <<- ret$trainPred
+```
+
+```{r}
+
+confusionMatrix(ifelse(trainPred[, "yes"] > best.cut.off, "yes", "no"), 
+                res_LM$train$outcome, positive = "yes")
+
+# compare to default 0.5
+confusionMatrix(ifelse(trainPred[, "yes"] > 0.5, "yes", "no"), 
+                res_LM$train$outcome, positive = "yes")
+```
+
+
+## Rpart
+
+* no need to scale data for any tree models
+
+### How to train model with different parameters - how to compare
+
+Either use Accuracy, or Kappa, or ROC (AUC), or distance to best model...
+
+* http://appliedpredictivemodeling.com/blog/2014/2/1/lw6har9oewknvus176q4o41alqw2ow
+
+```{r}
+# change parameters in train_lm file for AUC and parameter grid
+source("train_lm.R")
+res_rp <- train_lm(DF_B, error_est = "cv", model = "rpart", 
+                   y_ind = 1, x_ind = 2:ncol(DF_B), par = T)
+res_rp$model
+confusionMatrix(res_rp$model)
+
+# ROC 
+ret <- make_ROC(res_rp)
+best.cut.off <<- ret$best.cut.off
+trainPred <<- ret$trainPred
+
+confusionMatrix(ifelse(trainPred[, "yes"] > best.cut.off, "yes", "no"), 
+                res_rp$train$outcome, positive = "yes")
+
+```
+
+
+#### RF
+
+* does not overfit while number of trees is large.
+* trees ansambles trained independently can be combined
+
+```{r}
+# change parameters in train_lm file for AUC and parameter grid
+source("train_lm.R")
+res_rf <- train_lm(DF_B, error_est = "oob", model = "rf", 
+                   y_ind = 1, x_ind = 2:ncol(DF_B), par = T)
+
+res_rf$model$finalModel
+
+## See how number of trees affects Error
+plot(res_rf$model$finalModel)
+
+# ROC 
+ret <- make_ROC(res_rf)
+best.cut.off <<- ret$best.cut.off
+trainPred <<- ret$trainPred
+
+confusionMatrix(ifelse(trainPred[, "yes"] > best.cut.off, "yes", "no"), 
+                res_rf$train$outcome, positive = "yes")
+```
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
